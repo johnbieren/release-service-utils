@@ -104,6 +104,8 @@ RUN update-ca-trust
 
 COPY pyxis /home/pyxis
 COPY utils /home/utils
+COPY integration-tests /home/integration-tests
+RUN chgrp -R 0 /home/integration-tests && chmod -R g+rwX /home/integration-tests
 COPY scripts /home/scripts
 COPY templates /home/templates
 COPY kafka /home/kafka
