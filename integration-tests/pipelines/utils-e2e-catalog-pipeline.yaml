@@ -163,10 +163,10 @@ spec:
                 exit 1
               fi
 
-              # TODO: Update this for other files in the repo
+              # Full diff vs merge-base; find_catalog_suite_from_utils_diff + Dockerfile map paths to
+              # search tokens—paths outside COPY→/home trees yield no suite match (no pipeline list).
               changed=$(
-                git diff --name-only "${merge_base}..HEAD" -- \
-                  Dockerfile integration-tests/ scripts/ 2>/dev/null || true
+                git diff --name-only "${merge_base}..HEAD" 2>/dev/null || true
               )
               if [[ -z "${changed}" ]]; then
                 echo "find-affected: no relevant changes vs merge-base; skipping patch and catalog tests" >&2
@@ -184,9 +184,9 @@ spec:
                 printf '%s\n' "${changed}" | python3 integration-tests/lib/find_catalog_suite_from_utils_diff.py \
                   --catalog "${catalog_clone}"
               )
-              # TODO: after utils-e2e validation, default null to "" so match-affected skips when nothing resolves.
-              suite=$(jq -r '.pipelineTestSuite // "e2e"' <<< "${json_result}")
-              pipelineUsed=$(jq -r '.pipelineUsed // "e2e"' <<< "${json_result}")
+              # JSON null → empty string so match-affected-suite skips when nothing resolves.
+              suite=$(jq -r '.pipelineTestSuite // ""' <<< "${json_result}")
+              pipelineUsed=$(jq -r '.pipelineUsed // ""' <<< "${json_result}")
               echo "find-affected: pipelineTestSuite=${suite} pipelineUsed=${pipelineUsed}" >&2
               write_results "${suite}" "${pipelineUsed}"
             securityContext:
@@ -225,6 +225,7 @@ spec:
 
               # No affected pipelines → nothing to gate; downstream when: blocks also skip on empty pipelineUsed.
               if [[ -z "$(params.affectedPipelineUsed)" ]]; then
+                echo "match-affected-suite: pipelineUsed empty -> runCatalogE2e=no (skip fork / catalog e2e)" >&2
                 echo -n no > "$(results.runCatalogE2e.path)"
                 exit 0
               fi
@@ -233,12 +234,28 @@ spec:
               # If this scenario's dir is among them, we run catalog tests for this check.
               configured="$(params.integrationTestsSuiteDir)"
               affected="$(params.affectedSuites)"
+              pipeline_used="$(params.affectedPipelineUsed)"
+              {
+                echo "=== match-affected-suite ==="
+                echo "scenario integrationTestsSuiteDir: ${configured}"
+                echo ""
+                echo "find-affected pipelineTestSuite tokens:"
+                for w in ${affected}; do echo "  ${w}"; done
+                echo ""
+                echo "find-affected pipelineUsed tokens:"
+                for w in ${pipeline_used}; do echo "  ${w}"; done
+                echo ""
+              } >&2
               python3 -c "
               import sys
               configured, aff = sys.argv[1], sys.argv[2]
               tokens = {w for w in aff.split() if w}
               print('yes' if configured in tokens else 'no', end='')
-              " "${configured}" "${affected}" > "$(results.runCatalogE2e.path)"
+              " "${configured}" "${affected}" | tee "$(results.runCatalogE2e.path)"
+              # Newline on stdout only so logs do not glue tee output to the next line.
+              echo
+              decision=$(tr -d '\n' < "$(results.runCatalogE2e.path)")
+              echo "task result runCatalogE2e: ${decision}" >&2
             securityContext:
               runAsUser: 1001
 
@@ -314,7 +331,7 @@ spec:
               git remote add origin "$(params.utilsSourceUrl)"
               git fetch -q --depth 1 origin "$(params.utilsSourceRevision)"
               git checkout -q FETCH_HEAD
-              bash "${UTILS_WORK_DIR}/integration-tests/lib/utils-e2e-clone-patch-push.sh" \
+              bash "${UTILS_WORK_DIR}/integration-tests/lib/catalog_clone_patch_push.sh" \
                 "$(results.catalogBaseSha.path)" \
                 "$(results.catalogGitUrl.path)" \
                 "$(results.catalogGitRevision.path)" \
@@ -447,8 +464,8 @@ spec:
               if git clone --depth 1 "https://${GITHUB_TOKEN}@github.com/${temp_fork_repo}.git" \
                   "${temp_fork_clone_dir}/repo" 2>/dev/null; then
                 cd "${temp_fork_clone_dir}/repo"
-                if [[ -f .utils-e2e-catalog-base-sha ]]; then
-                  catalog_sha_at_patch="$(tr -d '[:space:]' < .utils-e2e-catalog-base-sha)"
+                if [[ -f .catalog-clone-base-sha ]]; then
+                  catalog_sha_at_patch="$(tr -d '[:space:]' < .catalog-clone-base-sha)"
                   catalog_sha_now="$(
                     git ls-remote "https://github.com/$(params.catalogRepo).git" \
                       "refs/heads/$(params.catalogRef)" 2>/dev/null \

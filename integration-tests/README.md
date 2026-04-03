@@ -21,9 +21,9 @@ Callers that target one catalog suite per check pass different **`integrationTes
 | `pipelines/utils-e2e-catalog-pipeline.yaml` | Params include `integrationTestsSuiteDir`, `managedPipelineName`; tasks above. |
 | `run-test.sh` | Submits a `PipelineRun` (env `PIPELINE_USED` → param `managedPipelineName`), prints watch/log commands, optional `--wait` (`./run-test.sh --help`). |
 | `lib/find_catalog_suite_from_utils_diff.py` | Maps a utils diff to affected suites; `--print-all-pairs` for tooling. |
-| `lib/utils-e2e-clone-patch-push.sh` | Clone catalog, patch image refs, temp repo, push. |
+| `lib/catalog_clone_patch_push.sh` | Clone catalog, patch image refs, temp repo, push. |
 | `lib/utils-e2e-run-single-catalog-e2e.py` | Creates the child catalog `PipelineRun` and waits. |
-| `lib/utils-e2e-cleanup.py` | Optional standalone cleanup (same idea as the pipeline `finally` task: delete temp fork, catalog drift warning). |
+| `lib/catalog_cleanup.py` | Optional standalone cleanup (same idea as the pipeline `finally` task: delete temp fork, catalog drift warning). |
 
 Files under `integration-tests/lib/` are copied into the utils image at `/home/integration-tests/lib/`.
 

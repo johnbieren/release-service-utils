@@ -85,7 +85,10 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-: "${SNAPSHOT_FILE:?}" "${CATALOG_E2E_RUNNER_IMAGE:?}" "${INTEGRATION_TESTS_SUITE_DIR:?}" "${PIPELINE_USED:?}"
+: "${SNAPSHOT_FILE:?run-test.sh: SNAPSHOT_FILE is required (path to Konflux Snapshot JSON)}"
+: "${CATALOG_E2E_RUNNER_IMAGE:?run-test.sh: CATALOG_E2E_RUNNER_IMAGE is required}"
+: "${INTEGRATION_TESTS_SUITE_DIR:?run-test.sh: INTEGRATION_TESTS_SUITE_DIR is required (catalog integration-tests/<name>/)}"
+: "${PIPELINE_USED:?run-test.sh: PIPELINE_USED is required (catalog pipelines/managed/<name>/ basename)}"
 [[ -f "${SNAPSHOT_FILE}" ]] || { echo "run-test.sh: no such file: ${SNAPSHOT_FILE}" >&2; exit 1; }
 jq -e . "${SNAPSHOT_FILE}" >/dev/null || exit 1
 
@@ -100,8 +103,8 @@ if [[ "${SNAP_GIT_URL}" == https://github.com/* && "${SNAP_GIT_URL}" != *.git ]]
 fi
 
 NAMESPACE="${NAMESPACE:-rhtap-release-2-tenant}"
-CATALOG_REPO="${CATALOG_REPO:-konflux-ci/release-service-catalog}"
-CATALOG_REF="${CATALOG_REF:-development}"
+CATALOG_REPO="${CATALOG_REPO:-johnbieren/release-service-catalog}"
+CATALOG_REF="${CATALOG_REF:-2209whappyfix}"
 DEST_REPO_PREFIX="${DEST_REPO_PREFIX:-hacbs-release-tests/catalog-utils-e2e}"
 VAULT_PASSWORD_SECRET_NAME="${VAULT_PASSWORD_SECRET_NAME:-e2e-test-vault-password}"
 GITHUB_TOKEN_SECRET_NAME="${GITHUB_TOKEN_SECRET_NAME:-e2e-test-github-token}"
