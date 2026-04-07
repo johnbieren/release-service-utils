@@ -22,7 +22,7 @@ Callers that target one catalog suite per check pass different **`integrationTes
 | `run-test.sh` | Submits a `PipelineRun` (env `PIPELINE_USED` → param `managedPipelineName`), prints watch/log commands, optional `--wait` (`./run-test.sh --help`). |
 | `lib/find_catalog_suite_from_utils_diff.py` | Maps a utils diff to affected suites; `--print-all-pairs` for tooling. |
 | `lib/catalog_clone_patch_push.sh` | Clone catalog, patch image refs, temp repo, push. |
-| `lib/utils-e2e-run-single-catalog-e2e.py` | Creates the child catalog `PipelineRun` and waits. |
+| `lib/run_single_catalog_e2e_suite.py` | Creates the child catalog `PipelineRun` and waits. |
 | `lib/catalog_cleanup.py` | Optional standalone cleanup (same idea as the pipeline `finally` task: delete temp fork, catalog drift warning). |
 
 Files under `integration-tests/lib/` are copied into the utils image at `/home/integration-tests/lib/`.
@@ -33,7 +33,7 @@ Files under `integration-tests/lib/` are copied into the utils image at `/home/i
 - **`vaultPasswordSecretName`**, **`githubTokenSecretName`**, **`kubeconfigSecretName`**: values are **Kubernetes Secret names** passed through to the **child** catalog **`e2e-tests-staging-pipeline`** as `VAULT_PASSWORD_SECRET_NAME`, `GITHUB_TOKEN_SECRET_NAME`, `KUBECONFIG_SECRET_NAME` (keys `password`, `token`, `kubeconfig`). Those Secrets must exist in **`rhtap-release-2-tenant`** where the child `PipelineRun` runs. The parent **`run-catalog-e2e`** step does **not** mount a kubeconfig Secret; it uses **in-cluster** `kubectl` like any other Tekton task.
 - **`catalogE2eRunnerImage`**: **release-service-catalog** image that includes `/home/e2e/tests`.
 - **`integrationTestsSuiteDir`** / **`managedPipelineName`**: must match a real `integration-tests/<dir>/` and RPA `pipelines/managed/<name>/` pairing, as for catalog’s own integration tests.
-- **`e2eWaitTimeout`**: wait timeout while the child catalog `PipelineRun` runs (see pipeline default).
+- **`e2eWaitTimeout`**: max wait in **seconds** while the child catalog `PipelineRun` runs (pipeline default `14400` = 4h).
 - Child catalog `PipelineRun` is created in **`rhtap-release-2-tenant`** on the **same cluster** as the parent PLR (in-cluster `kubectl`), alongside catalog **`simple-e2e-test`** and e2e ExternalSecrets.
 
 ## How this runs
@@ -83,4 +83,4 @@ Files under `integration-tests/lib/` are copied into the utils image at `/home/i
    ./run-test.sh                      # add --wait to block; with --wait the PipelineRun is deleted when done
    ```
 
-   Optional: **`NAMESPACE`**, **`E2E_WAIT_TIMEOUT`**, **`PIPELINE_RUN_WAIT_TIMEOUT`** (used with `--wait`). The child catalog e2e step uses the git resolver in **`lib/utils-e2e-run-single-catalog-e2e.py`** (upstream catalog `development` today); overriding that for a fork requires changing that script.
+   Optional: **`NAMESPACE`**, **`E2E_WAIT_TIMEOUT`** (seconds, default `14400`) — passed as pipeline **`e2eWaitTimeout`** and, with **`--wait`**, used as `kubectl wait --timeout=<value>s` on the orchestrator PLR. The child catalog e2e step uses the git resolver in **`lib/run_single_catalog_e2e_suite.py`** (upstream catalog `development` today); overriding that for a fork requires changing that script.

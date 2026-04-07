@@ -63,7 +63,10 @@ spec:
         cluster where this PipelineRun exists.
     - name: e2eWaitTimeout
       type: string
-      default: 4h
+      default: "14400"
+      description: >-
+        Max time in seconds to wait for the child catalog e2e PipelineRun (default 14400 = 4h).
+        Passed through as env E2E_WAIT_TIMEOUT to run_single_catalog_e2e_suite.py.
   tasks:
     - name: extract-snapshot
       params:
@@ -419,7 +422,7 @@ spec:
               export KUBECONFIG_SECRET_NAME="$(params.kubeconfigSecretName)"
               export PARENT_PIPELINE_RUN="$(params.parentPipelineRun)"
               export E2E_WAIT_TIMEOUT="$(params.e2eWaitTimeout)"
-              exec python3 /home/integration-tests/lib/utils-e2e-run-single-catalog-e2e.py
+              exec python3 /home/integration-tests/lib/run_single_catalog_e2e_suite.py
             securityContext:
               runAsUser: 1001
 

@@ -33,7 +33,8 @@
 #   NAMESPACE, CATALOG_REPO, … — see pipelines/utils-e2e-catalog-pipeline.yaml
 #   (NAMESPACE defaults to rhtap-release-2-tenant). KUBECONFIG_SECRET_NAME (stage; passed through to the
 #   child catalog pipeline only)—see README.
-#   PIPELINE_RUN_WAIT_TIMEOUT for --wait (default: E2E_WAIT_TIMEOUT).
+#   E2E_WAIT_TIMEOUT             Seconds; default 14400 (4h). Pipeline param e2eWaitTimeout; with --wait,
+#                                also kubectl wait --timeout=<n>s on the orchestrator PLR (kubectl needs a cap).
 #   RUN_TEST_KEEP_PIPELINERUN=1  With --wait, skip deleting the PipelineRun when finished (debugging).
 #
 # Local kubeconfig (required for real runs, not --dry-run):
@@ -46,7 +47,7 @@
 # Options:
 #   --dry-run          kubectl create --dry-run=client -o yaml (no PipelineRun created)
 #   --wait             After create, block until the PipelineRun finishes (success or failure);
-#                      uses PIPELINE_RUN_WAIT_TIMEOUT (default: same as E2E_WAIT_TIMEOUT, 4h).
+#                      uses E2E_WAIT_TIMEOUT for kubectl wait (same value as pipeline e2eWaitTimeout).
 #                      When the run finishes, deletes the PipelineRun (success or failure) so runs
 #                      do not accumulate; set RUN_TEST_KEEP_PIPELINERUN=1 to skip deletion.
 #   (default)          Prints how to watch logs / status; does not wait (PipelineRun remains).
@@ -109,8 +110,8 @@ DEST_REPO_PREFIX="${DEST_REPO_PREFIX:-hacbs-release-tests/catalog-utils-e2e}"
 VAULT_PASSWORD_SECRET_NAME="${VAULT_PASSWORD_SECRET_NAME:-e2e-test-vault-password}"
 GITHUB_TOKEN_SECRET_NAME="${GITHUB_TOKEN_SECRET_NAME:-e2e-test-github-token}"
 KUBECONFIG_SECRET_NAME="${KUBECONFIG_SECRET_NAME:-e2e-test-service-account-kubeconfig}"
-E2E_WAIT_TIMEOUT="${E2E_WAIT_TIMEOUT:-4h}"
-PIPELINE_RUN_WAIT_TIMEOUT="${PIPELINE_RUN_WAIT_TIMEOUT:-${E2E_WAIT_TIMEOUT}}"
+# Child catalog PLR wait (run_single_catalog_e2e_suite.py) and param e2eWaitTimeout: seconds.
+E2E_WAIT_TIMEOUT="${E2E_WAIT_TIMEOUT:-14400}"
 UTILS_PIPELINE_GIT_URL="${UTILS_PIPELINE_GIT_URL:-${SNAP_GIT_URL}}"
 UTILS_PIPELINE_GIT_REVISION="${UTILS_PIPELINE_GIT_REVISION:-${SNAP_GIT_REV}}"
 readonly _UTILS_PIPELINE_PATH_IN_REPO='integration-tests/pipelines/utils-e2e-catalog-pipeline.yaml'
@@ -204,9 +205,9 @@ EOF
 print_monitoring_hint "${PR_NAME}"
 
 if [[ "${WAIT}" == true ]]; then
-  echo "Waiting for completion (timeout ${PIPELINE_RUN_WAIT_TIMEOUT})..."
+  echo "Waiting for completion (timeout ${E2E_WAIT_TIMEOUT}s)..."
   if ! "${KUBECTL}" wait --for=jsonpath='{.status.completionTime}' "pipelinerun/${PR_NAME}" -n "${NAMESPACE}" \
-    --timeout="${PIPELINE_RUN_WAIT_TIMEOUT}"; then
+    --timeout="${E2E_WAIT_TIMEOUT}s"; then
     echo "run-test.sh: wait failed or timed out" >&2
     delete_pipelinerun "${PR_NAME}"
     exit 1

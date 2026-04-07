@@ -1,29 +1,37 @@
 #!/usr/bin/env python3
 """Create one PipelineRun for catalog integration tests and wait for completion.
 
-Invokes the pipeline defined in catalog at ``integration-tests/pipelines/e2e-tests-staging-pipeline.yaml``
+Invokes the pipeline defined in catalog at
+``integration-tests/pipelines/e2e-tests-staging-pipeline.yaml``.
 
-Used by ``utils-e2e-catalog-pipeline`` task ``run-catalog-e2e``. Expects a single suite pair in env.
+Used by ``utils-e2e-catalog-pipeline`` task ``run-catalog-e2e`` (this file:
+``run_single_catalog_e2e_suite.py``). Expects a single suite pair in env.
 
 Required env:
-  KUBECONFIG (path to kubeconfig for ``kubectl`` create/wait; from ``orchestrationKubeconfigSecretName``)
+  KUBECONFIG (path to kubeconfig for ``kubectl`` create/wait; from
+  ``orchestrationKubeconfigSecretName``)
   CATALOG_GIT_URL, CATALOG_GIT_REVISION, CATALOG_E2E_RUNNER_IMAGE,
   PIPELINE_TEST_SUITE, PIPELINE_USED,
   VAULT_PASSWORD_SECRET_NAME, GITHUB_TOKEN_SECRET_NAME, KUBECONFIG_SECRET_NAME,
-  ORCHESTRATOR_PIPELINE_RUN_UID — orchestrator PLR ``metadata.uid`` (pipeline sets ``$(context.pipelineRun.uid)``);
-  child PLR name is ``utils-e2e-catalog-<uid>`` (same suffix as the temp GitHub fork).
+  ORCHESTRATOR_PIPELINE_RUN_UID — orchestrator PLR ``metadata.uid`` (pipeline sets
+  ``$(context.pipelineRun.uid)``); child PLR name is ``utils-e2e-catalog-<uid>``
+  (same suffix as the temp GitHub fork).
 
-``KUBECONFIG_SECRET_NAME`` is the Secret **name** passed to the child catalog ``PipelineRun`` as pipeline
-param ``KUBECONFIG_SECRET_NAME`` (stage/test cluster kubeconfig for ``e2e-tests-staging-pipeline`` tasks).
+``KUBECONFIG_SECRET_NAME`` is the Secret **name** passed to the child catalog
+``PipelineRun`` as pipeline param ``KUBECONFIG_SECRET_NAME`` (stage/test cluster
+kubeconfig for ``e2e-tests-staging-pipeline`` tasks).
 
 Optional:
-  E2E_WAIT_TIMEOUT (default 4h)
+  E2E_WAIT_TIMEOUT — max wait for the child catalog PipelineRun, in seconds
+  (default 14400 = 4h).
   PARENT_PIPELINE_RUN
 
-The catalog ``run-test`` task **always exits 0** and encodes outcome in task result **TEST_OUTPUT**
-(JSON ``result``: SUCCESS | FAILURE | SKIPPED). This script fails if **TEST_OUTPUT** is FAILURE,
-matching how Konflux reads integration tests — **not** ``PipelineRun.status`` alone.
+The catalog ``run-test`` task **always exits 0** and encodes outcome in task
+result **TEST_OUTPUT** (JSON ``result``: SUCCESS | FAILURE | SKIPPED). This
+script fails if **TEST_OUTPUT** is FAILURE, matching how Konflux reads
+integration tests — **not** ``PipelineRun.status`` alone.
 """
+
 from __future__ import annotations
 
 import json
@@ -34,30 +42,14 @@ import tempfile
 import time
 from pathlib import Path
 
+from catalog_e2e_helpers import require_env
+
 CATALOG_E2E_NAMESPACE = "rhtap-release-2-tenant"
 
 
-def _require_env(name: str) -> str:
-    v = os.environ.get(name, "").strip()
-    if not v:
-        print(f"ERROR: {name} is required", file=sys.stderr)
-        sys.exit(1)
-    return v
-
-
-def _parse_k8s_timeout(spec: str) -> float:
-    """Seconds from kubectl-style duration (e.g. 4h, 30m, 120s) or plain seconds."""
-    spec = spec.strip().lower()
-    if not spec:
-        return 4 * 3600.0
-    if spec[-1] in "smh":
-        return float(spec[:-1]) * {"s": 1.0, "m": 60.0, "h": 3600.0}[spec[-1]]
-    return float(spec)
-
-
 def _pipelinerun_finished(name: str, ns: str) -> tuple[bool, str] | None:
-    """If terminal, (success, reason snippet); if still running, None."""
-    ct = subprocess.run(
+    """Return (succeeded, message) when done; None while still running."""
+    plr = subprocess.run(
         [
             "kubectl",
             "get",
@@ -65,52 +57,37 @@ def _pipelinerun_finished(name: str, ns: str) -> tuple[bool, str] | None:
             "-n",
             ns,
             "-o",
-            "jsonpath={.status.completionTime}",
+            "json",
         ],
         capture_output=True,
         text=True,
         check=False,
     )
-    if ct.returncode != 0:
-        print(ct.stderr or ct.stdout, file=sys.stderr)
+    if plr.returncode != 0:
+        print(plr.stderr or plr.stdout, file=sys.stderr)
         sys.exit(1)
-    if not ct.stdout.strip():
+    try:
+        plr_json = json.loads(plr.stdout)
+    except json.JSONDecodeError as e:
+        print(f"ERROR: invalid PipelineRun JSON from kubectl: {e}", file=sys.stderr)
+        sys.exit(1)
+    status = plr_json.get("status") or {}
+    if not (status.get("completionTime") or "").strip():
         return None
-    st = subprocess.run(
-        [
-            "kubectl",
-            "get",
-            f"pipelinerun/{name}",
-            "-n",
-            ns,
-            "-o",
-            'jsonpath={.status.conditions[?(@.type=="Succeeded")].status}',
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    ok = st.stdout.strip() == "True"
-    msg = subprocess.run(
-        [
-            "kubectl",
-            "get",
-            f"pipelinerun/{name}",
-            "-n",
-            ns,
-            "-o",
-            'jsonpath={.status.conditions[?(@.type=="Succeeded")].message}',
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    ).stdout.strip()
-    return (ok, msg or "(no message)")
+    for cond in status.get("conditions") or []:
+        if cond.get("type") == "Succeeded":
+            ok = cond.get("status") == "True"
+            msg = (cond.get("message") or "").strip() or "(no message)"
+            return (ok, msg)
+    return (False, "(no Succeeded condition)")
 
 
-def _wait_pipelinerun_terminal(*, name: str, ns: str, timeout_spec: str) -> bool:
-    """Wait until completionTime is set; return True if Succeeded=True. Exits on timeout or kubectl error."""
-    deadline = time.monotonic() + _parse_k8s_timeout(timeout_spec)
+def _wait_pipelinerun_terminal(*, name: str, ns: str, timeout_seconds: float) -> bool:
+    """Wait until completionTime is set; return True if Succeeded=True.
+
+    Exits on timeout or kubectl error.
+    """
+    deadline = time.monotonic() + timeout_seconds
     interval = 10.0
     heartbeat = 60.0
     last_hb = time.monotonic()
@@ -132,24 +109,25 @@ def _wait_pipelinerun_terminal(*, name: str, ns: str, timeout_spec: str) -> bool
             last_hb = now
         time.sleep(interval)
     print(
-        f"ERROR: timeout waiting for pipelinerun/{name} in {ns} ({timeout_spec})",
+        f"ERROR: timeout waiting for pipelinerun/{name} in {ns} ({timeout_seconds:g}s)",
         file=sys.stderr,
     )
     sys.exit(124)
 
 
 def _taskrun_name_for_pipeline_task(pr_name: str, ns: str, pipeline_task: str) -> str | None:
-    r = subprocess.run(
+    """Resolve the TaskRun name for a pipeline task from the PipelineRun's childReferences."""
+    plr = subprocess.run(
         ["kubectl", "get", "pipelinerun", pr_name, "-n", ns, "-o", "json"],
         capture_output=True,
         text=True,
         check=False,
     )
-    if r.returncode != 0:
-        print(r.stderr or r.stdout, file=sys.stderr)
+    if plr.returncode != 0:
+        print(plr.stderr or plr.stdout, file=sys.stderr)
         return None
-    pr = json.loads(r.stdout)
-    for ref in pr.get("status", {}).get("childReferences", []) or []:
+    plr_json = json.loads(plr.stdout)
+    for ref in plr_json.get("status", {}).get("childReferences", []) or []:
         if ref.get("pipelineTaskName") == pipeline_task:
             name = ref.get("name")
             if isinstance(name, str) and name:
@@ -158,7 +136,7 @@ def _taskrun_name_for_pipeline_task(pr_name: str, ns: str, pipeline_task: str) -
 
 
 def _fetch_run_test_task_output_json(pr_name: str, ns: str) -> dict | None:
-    """Load JSON from TaskRun ``run-test`` result TEST_OUTPUT (catalog e2e staging pipeline)."""
+    """Load JSON from TaskRun ``run-test`` result TEST_OUTPUT."""
     tr_name = _taskrun_name_for_pipeline_task(pr_name, ns, "run-test")
     if not tr_name:
         print(
@@ -167,17 +145,17 @@ def _fetch_run_test_task_output_json(pr_name: str, ns: str) -> dict | None:
             file=sys.stderr,
         )
         return None
-    r = subprocess.run(
+    taskrun = subprocess.run(
         ["kubectl", "get", "taskrun", tr_name, "-n", ns, "-o", "json"],
         capture_output=True,
         text=True,
         check=False,
     )
-    if r.returncode != 0:
-        print(r.stderr or r.stdout, file=sys.stderr)
+    if taskrun.returncode != 0:
+        print(taskrun.stderr or taskrun.stdout, file=sys.stderr)
         return None
-    tr = json.loads(r.stdout)
-    for res in tr.get("status", {}).get("results", []) or []:
+    taskrun_json = json.loads(taskrun.stdout)
+    for res in taskrun_json.get("status", {}).get("results", []) or []:
         if res.get("name") != "TEST_OUTPUT":
             continue
         raw = res.get("value")
@@ -199,9 +177,10 @@ def _require_test_output_success(payload: dict | None) -> None:
         sys.exit(1)
     outcome = str(payload.get("result", "")).strip().upper()
     if outcome == "FAILURE":
+        detail = json.dumps(payload)
         print(
             "ERROR: catalog e2e run-test reported FAILURE in task result TEST_OUTPUT "
-            f"(IntegrationTest uses this; PipelineRun may still show Succeeded): {json.dumps(payload)}",
+            f"(IntegrationTest uses this; PipelineRun may still show Succeeded): {detail}",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -214,13 +193,15 @@ def _require_test_output_success(payload: dict | None) -> None:
         )
         return
     print(
-        f"ERROR: unexpected TEST_OUTPUT result field (expected SUCCESS, FAILURE, or SKIPPED): {payload!r}",
+        "ERROR: unexpected TEST_OUTPUT result field "
+        f"(expected SUCCESS, FAILURE, or SKIPPED): {payload!r}",
         file=sys.stderr,
     )
     sys.exit(1)
 
 
 def _build_snapshot(*, runner: str, url: str, rev: str) -> dict[str, object]:
+    """Build the SNAPSHOT JSON object passed into the catalog e2e PipelineRun."""
     return {
         "application": "utils-orchestrated-e2e",
         "artifacts": {},
@@ -246,6 +227,7 @@ def _build_catalog_e2e_pipelinerun(
     github_token_secret_name: str,
     kubeconfig_secret_name: str,
 ) -> dict[str, object]:
+    """Build the child catalog e2e PipelineRun manifest (metadata, pipelineRef, params)."""
     return {
         "apiVersion": "tekton.dev/v1",
         "kind": "PipelineRun",
@@ -262,8 +244,11 @@ def _build_catalog_e2e_pipelinerun(
             "pipelineRef": {
                 "resolver": "git",
                 "params": [
-                    {"name": "url", "value": "https://github.com/johnbieren/release-service-catalog.git"},
-                    {"name": "revision", "value": "release2209"},
+                    {
+                        "name": "url",
+                        "value": "https://github.com/konflux-ci/release-service-catalog.git",
+                    },
+                    {"name": "revision", "value": "development"},
                     {
                         "name": "pathInRepo",
                         "value": "integration-tests/pipelines/e2e-tests-staging-pipeline.yaml",
@@ -283,24 +268,25 @@ def _build_catalog_e2e_pipelinerun(
 
 
 def main() -> None:
-    _require_env("KUBECONFIG")
+    """Create the catalog test PipelineRun from env, wait for it, and validate TEST_OUTPUT."""
+    require_env("KUBECONFIG")
     ns = CATALOG_E2E_NAMESPACE
-    url = _require_env("CATALOG_GIT_URL")
-    rev = _require_env("CATALOG_GIT_REVISION")
-    runner = _require_env("CATALOG_E2E_RUNNER_IMAGE")
-    suite = _require_env("PIPELINE_TEST_SUITE")
-    used = _require_env("PIPELINE_USED")
+    url = require_env("CATALOG_GIT_URL")
+    rev = require_env("CATALOG_GIT_REVISION")
+    runner = require_env("CATALOG_E2E_RUNNER_IMAGE")
+    suite = require_env("PIPELINE_TEST_SUITE")
+    used = require_env("PIPELINE_USED")
 
     parent = os.environ.get("PARENT_PIPELINE_RUN", "")
-    wait = os.environ.get("E2E_WAIT_TIMEOUT", "4h")
-    orch_uid = _require_env("ORCHESTRATOR_PIPELINE_RUN_UID")
+    wait_seconds = float(os.environ.get("E2E_WAIT_TIMEOUT") or "14400")
+    orch_uid = require_env("ORCHESTRATOR_PIPELINE_RUN_UID")
     child_plr_name = f"utils-e2e-catalog-{orch_uid}"
     vault = os.environ.get("VAULT_PASSWORD_SECRET_NAME", "e2e-test-vault-password")
     gh = os.environ.get("GITHUB_TOKEN_SECRET_NAME", "e2e-test-github-token")
     kc = os.environ.get("KUBECONFIG_SECRET_NAME", "e2e-test-service-account-kubeconfig")
 
     snap = _build_snapshot(runner=runner, url=url, rev=rev)
-    pr = _build_catalog_e2e_pipelinerun(
+    plr_manifest = _build_catalog_e2e_pipelinerun(
         ns=ns,
         child_plr_name=child_plr_name,
         parent=parent,
@@ -317,20 +303,29 @@ def main() -> None:
         fd, path_str = tempfile.mkstemp(suffix=".json")
         path = Path(path_str)
         with os.fdopen(fd, "w") as f:
-            json.dump(pr, f)
+            json.dump(plr_manifest, f)
 
         out = subprocess.check_output(
-            ["kubectl", "create", "-f", str(path), "-o", "jsonpath={.metadata.name}"],
+            [
+                "kubectl",
+                "create",
+                "-f",
+                str(path),
+                "-o",
+                "jsonpath={.metadata.name}",
+            ],
             text=True,
         )
         name = out.strip()
-        print(f"Created catalog test PipelineRun {name} in {ns} for suite {suite!r}", flush=True)
+        print(
+            f"Created catalog test PipelineRun {name} in {ns} for suite {suite!r}", flush=True
+        )
         print(f"Waiting for pipelinerun/{name} to finish...", flush=True)
-        # Do not use kubectl wait --for=condition=Succeeded: it never returns when the PR fails
-        # (Succeeded stays False), so the step hangs until timeout and delays finally cleanup.
-        if not _wait_pipelinerun_terminal(name=name, ns=ns, timeout_spec=wait):
+        # Do not use kubectl wait --for=condition=Succeeded: on failure Succeeded
+        # stays False, so the step would hang until timeout and delay finally cleanup.
+        if not _wait_pipelinerun_terminal(name=name, ns=ns, timeout_seconds=wait_seconds):
             sys.exit(1)
-        # Catalog run-test exits 0 even on test failure; real status is task result TEST_OUTPUT.
+        # Catalog run-test exits 0 even on test failure; status is task TEST_OUTPUT.
         _require_test_output_success(_fetch_run_test_task_output_json(name, ns))
         print(f"PipelineRun {name} succeeded (TEST_OUTPUT ok)", flush=True)
     finally:
